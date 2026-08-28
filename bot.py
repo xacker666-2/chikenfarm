@@ -43,30 +43,18 @@ KNOWN_BASE_INCOME = {
 
 GROWTH_RATE = 3.49
 
-# Системный промпт для ИИ-помощника
-SYSTEM_PROMPT = """Ты — личный ИИ-помощник и стратегический аналитик по игре "Куриная ферма".
-Твоя задача — помогать игроку рассчитывать доходы, окупаемость, слияния куриц и давать советы по оптимизации фермы.
+# Строгий системный промпт с выводом базы данных и требованием краткости
+SYSTEM_PROMPT = """Ты — стратегический аналитик мобильной игры "Куриная ферма".
+Твоя задача — давать МАКСИМАЛЬНО КРАТКИЕ, чёткие, структурированные ответы строго по делу. Без лишней воды.
 
-Экономика и правила игры:
-1. Денежные единицы:
-   - 1 K = 1 000, 1 M = 1 000 000, 1 B = 10^9, 1 T (трлн) = 10^12
-   - 1 qd = 10^15 (1 000 трлн)
-   - 1 Qd = 10^18
-   - 1 Sx = 10^21 (1 000 000 qd)
-   - 1 Sp = 10^24 (1 000 Sx)
-2. Доход:
-   - Тик каждые 5 секунд (720 тиков в час).
-   - Известный базовый доход за тик: L25 = 205 трлн, L26 = 775 трлн, L27 = 2.5 qd.
-   - Итоговый доход за тик = BaseIncome * 4.5 * 12500.
-   - Доход за час (в Sx) = (Итоговый за тик / 10^21) * 720.
-3. Покупка и Слияние:
-   - 100 кур 18 уровня стоят 7 Sx => 1 курица 18 уровня стоит 0.07 Sx.
-   - Слияние 3-х кур уровня L даёт 1 курицу уровня L+1.
-   - Для сборки 1 курицы уровня L нужно 3^(L-18) кур 18 уровня.
-   - Стоимость 1 курицы L = 3^(L-18) * 0.07 Sx.
-   - Бонус слияния (прирост дохода): Bonus% = (BaseIncome(L+1) - 3*BaseIncome(L)) / (3*BaseIncome(L)) * 100%.
+Твоя текущая база данных (синхронизация с игроком):
+- Множители дохода: 4.5 и 12,500
+- Базовый доход: L25 = 205 трлн, L26 = 775 трлн, L27 = 2.5 qd
+- Коэффициент роста базы: 3.49
+- Тик: каждые 5 сек (720 тиков в час)
+- Стоимость: 100 кур 18 уровня = 7 Sx (1 шт = 0.07 Sx), слияние 3 в 1.
 
-Отвечай четко, по делу, с экспертным пониманием механик куриной фермы."""
+ПРАВИЛО: В самом начале своего ответа всегда в первой строчке коротко выводи текущие параметры базы (например: `📌 [База: Множители 4.5×12.5k | L25=205т | L26=775т | L27=2.5qd]`), чтобы подтвердить синхронизацию данных с игроком."""
 
 # ==============================================================================
 # 3. МАТЕМАТИЧЕСКИЙ ДВИЖОК
@@ -149,11 +137,10 @@ def calculate_merge_bonus(level: int):
     }
 
 # ==============================================================================
-# 4. ИНТЕГРАЦИЯ С НЕЙРОСЕТЬЮ (БЕЗОПАСНАЯ ОБРАБОТКА КЛЮЧА И ЗАПРОСА)
+# 4. ИНТЕГРАЦИЯ С НЕЙРОСЕТЬЮ
 # ==============================================================================
 def ask_ai(user_query: str) -> str:
     raw_key = os.environ.get("OPENROUTER_API_KEY", "")
-    # Очистка ключа от переносов строк, табуляций и пробелов
     key = "".join(raw_key.split())
 
     if not key or "твой_ключ" in key:
@@ -180,12 +167,11 @@ def ask_ai(user_query: str) -> str:
         else:
             return f"⚠️ Ошибка нейросети ({response.status_code}): {response.text}"
     except requests.exceptions.Timeout:
-        return "⚠️ Сервер ИИ не ответил за отведенное время. Попробуй еще раз."
+        return "⚠️ Сервер ИИ не ответил за отведенное время."
     except Exception as e:
         return f"⚠️ Ошибка соединения с ИИ: {str(e)}"
 
 def safe_send_message(chat_id: int, text: str):
-    """Отправка сообщений с разбиением на части и fallback при ошибке Markdown"""
     chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
     for chunk in chunks:
         try:
@@ -206,13 +192,13 @@ def get_main_keyboard():
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "🐔 **ИИ-Помощник и Аналитик Куриной Фермы**\n\n"
-        "Я могу:\n"
-        "1. Рассчитывать статистику кур и слияний по кнопкам ниже.\n"
-        "2. Отвечать на **любые вопросы** текстом благодаря встроенной нейросети!\n\n"
-        "Спроси меня что угодно!"
+        "🐔 **ИИ-Помощник Куриной Фермы**\n\n"
+        "📌 *Текущая база данных:*\n"
+        "• Множители: 4.5 и 12,500\n"
+        "• Базы: L25=205 трлн, L26=775 трлн, L27=2.5 qd\n\n"
+        "Используй кнопки ниже или пиши вопросы текстом!"
     )
-    safe_send_message(message.chat.id, text)
+    bot.send_message(message.chat.id, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: msg.text.startswith("🐔 Курица "))
 def handle_quick_chicken(message):
@@ -220,7 +206,8 @@ def handle_quick_chicken(message):
         lvl = int(message.text.split()[-1])
         st = calculate_full_stats(lvl)
         msg = (
-            f"🐔 **Курица {st['level']} уровня**\n\n"
+            f"📌 `[База: Множители 4.5×12.5k | L{lvl}]`\n\n"
+            f"🐔 **Курица {st['level']} уровня**\n"
             f"🔹 Базовый доход: {format_units(st['base_inc'])}\n"
             f"⚡ Доход в час: `{st['hour_inc_sx']:.4f} Sx/час`\n"
             f"💰 Цена: `{st['cost_sx']:.2f} Sx` ({st['count18']:,} кур 18 ур.)\n"
@@ -236,7 +223,8 @@ def handle_quick_merge(message):
         lvl = int(message.text.split()[-1].split("->")[0])
         m = calculate_merge_bonus(lvl)
         msg = (
-            f"🔄 **Слияние 3× [{m['level']}] ➔ 1× [{m['next_level']}]**\n\n"
+            f"📌 `[База: Слияние {m['level']}->{m['next_level']}]`\n\n"
+            f"🔄 **Слияние 3× [{m['level']}] ➔ 1× [{m['next_level']}]**\n"
             f"🔥 Бонус прироста: `+{m['bonus_pct']:.2f}%`\n"
             f"📈 Прирост дохода: `+{m['diff_hour_sx']:.2f} Sx/час`"
         )
@@ -246,18 +234,29 @@ def handle_quick_merge(message):
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Таблица (20-28)")
 def handle_table(message):
-    res = "📊 **Уровни 20–28:**\n\n`Ур | Доход/час | Цена | Окупаемость`\n`----------------------------------`\n"
+    res = "📊 **Уровни 20–28 (База проверена):**\n\n`Ур | Доход/час | Цена | Окупаемость`\n`----------------------------------`\n"
     for lvl in range(20, 29):
         st = calculate_full_stats(lvl)
         res += f"`{lvl:2d} | {st['hour_inc_sx']:10.2f} | {st['cost_sx']:7.2f} | {st['payback_hours']:4.1f}ч`\n"
     safe_send_message(message.chat.id, res)
 
-# Все остальные текстовые сообщения обрабатывает НЕЙРОСЕТЬ
+# Текстовые запросы к ИИ с изменяющимся сообщением «Думаю...»
 @bot.message_handler(func=lambda msg: True)
 def handle_ai_chat(message):
-    bot.send_chat_action(message.chat.id, 'typing')
+    # Отправляем начальное сообщение статуса
+    sent_msg = bot.send_message(message.chat.id, "⏳ Думаю и сверяю базу данных...")
+    
+    # Получаем ответ от ИИ
     ai_response = ask_ai(message.text)
-    safe_send_message(message.chat.id, ai_response)
+    
+    # Редактируем сообщение вместо отправки нового
+    try:
+        bot.edit_message_text(ai_response, chat_id=message.chat.id, message_id=sent_msg.message_id, parse_mode="Markdown")
+    except Exception:
+        try:
+            bot.edit_message_text(ai_response, chat_id=message.chat.id, message_id=sent_msg.message_id)
+        except Exception:
+            safe_send_message(message.chat.id, ai_response)
 
 # ==============================================================================
 # 6. ЗАПУСК
