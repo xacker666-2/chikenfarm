@@ -28,7 +28,7 @@ threading.Thread(target=run_health_check, daemon=True).start()
 # ==============================================================================
 # 2. КЛЮЧИ И НАСТРОЙКИ
 # ==============================================================================
-BOT_TOKEN = "8923655626:AAFcOSNkpT8I7ut6Mlh41pbvDYug7FHemgg"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8923655626:AAFcOSNkpT8I7ut6Mlh41pbvDYug7FHemgg")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -45,7 +45,7 @@ GROWTH_RATE = 3.49
 
 # Системный промпт для ИИ-помощника
 SYSTEM_PROMPT = """Ты — личный ИИ-помощник и стратегический аналитик по игре "Куриная ферма".
-Твоя задача — помогать игроку расчитывать доходы, окупаемость, слияния куриц и давать советы по оптимизации фермы.
+Твоя задача — помогать игроку рассчитывать доходы, окупаемость, слияния куриц и давать советы по оптимизации фермы.
 
 Экономика и правила игры:
 1. Денежные единицы:
@@ -149,15 +149,15 @@ def calculate_merge_bonus(level: int):
     }
 
 # ==============================================================================
-# 4. ИНТЕГРАЦИЯ С НЕЙРОСЕТЬЮ (С ЖЕСТКОЙ ОЧИСТКОЙ КЛЮЧА)
+# 4. ИНТЕГРАЦИЯ С НЕЙРОСЕТЬЮ (БЕЗОПАСНАЯ ОБРАБОТКА КЛЮЧА И ЗАПРОСА)
 # ==============================================================================
 def ask_ai(user_query: str) -> str:
     raw_key = os.environ.get("OPENROUTER_API_KEY", "")
-    # ЖЕСТКАЯ ОЧИСТКА: удаляет любые переносы \n, \r, пробелы и табы
+    # Очистка ключа от невидимых символов и переносов строк
     key = "".join(raw_key.split())
 
     if not key or "твой_ключ" in key:
-        return "⚠️ Не настроен OPENROUTER_API_KEY в переменных Render!"
+        return "⚠️ Не настроен OPENROUTER_API_KEY в переменных окружения Render!"
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -173,14 +173,28 @@ def ask_ai(user_query: str) -> str:
     }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response = requests.post(url, json=payload, headers=headers, timeout=25)
         if response.status_code == 200:
             data = response.json()
             return data["choices"][0]["message"]["content"]
         else:
             return f"⚠️ Ошибка нейросети ({response.status_code}): {response.text}"
+    except requests.exceptions.Timeout:
+        return "⚠️ Сервер ИИ не ответил за отведенное время. Попробуй еще раз."
     except Exception as e:
         return f"⚠️ Ошибка соединения с ИИ: {str(e)}"
+
+def safe_send_message(chat_id: int, text: str):
+    """Безопасная отправка сообщений с разбивкой длинных текстов и защитой от ошибок Markdown"""
+    # Разбиваем текст на куски до 4000 символов (лимит Telegram — 4096)
+    chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+    
+    for chunk in chunks:
+        try:
+            bot.send_message(chat_id, chunk, parse_mode="Markdown")
+        except Exception:
+            # Если Telegram ругается на некорректную Markdown-разметку от ИИ, шлем чистым текстом
+            bot.send_message(chat_id, chunk)
 
 # ==============================================================================
 # 5. ХЕНДЛЕРЫ TELEGRAM
@@ -201,7 +215,7 @@ def send_welcome(message):
         "2. Отвечать на **любые вопросы** текстом благодаря встроенной нейросети!\n\n"
         "Спроси меня что угодно!"
     )
-    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=get_main_keyboard())
+    safe_send_message(message.chat.id, text)
 
 @bot.message_handler(func=lambda msg: msg.text.startswith("🐔 Курица "))
 def handle_quick_chicken(message):
@@ -215,7 +229,7 @@ def handle_quick_chicken(message):
             f"💰 Цена: `{st['cost_sx']:.2f} Sx` ({st['count18']:,} кур 18 ур.)\n"
             f"⏳ Окупаемость: `{st['payback_hours']:.2f} часов`"
         )
-        bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+        safe_send_message(message.chat.id, msg)
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
@@ -229,7 +243,7 @@ def handle_quick_merge(message):
             f"🔥 Бонус прироста: `+{m['bonus_pct']:.2f}%`\n"
             f"📈 Прирост дохода: `+{m['diff_hour_sx']:.2f} Sx/час`"
         )
-        bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+        safe_send_message(message.chat.id, msg)
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
@@ -239,14 +253,14 @@ def handle_table(message):
     for lvl in range(20, 29):
         st = calculate_full_stats(lvl)
         res += f"`{lvl:2d} | {st['hour_inc_sx']:10.2f} | {st['cost_sx']:7.2f} | {st['payback_hours']:4.1f}ч`\n"
-    bot.send_message(message.chat.id, res, parse_mode="Markdown")
+    safe_send_message(message.chat.id, res)
 
 # Все остальные текстовые сообщения обрабатывает НЕЙРОСЕТЬ
 @bot.message_handler(func=lambda msg: True)
 def handle_ai_chat(message):
     bot.send_chat_action(message.chat.id, 'typing')
     ai_response = ask_ai(message.text)
-    bot.send_message(message.chat.id, ai_response, parse_mode="Markdown")
+    safe_send_message(message.chat.id, ai_response)
 
 # ==============================================================================
 # 6. ЗАПУСК
@@ -258,4 +272,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Ошибка сброса вебхука: {e}")
     
-    bot.infinity_polling(timeout=20, long_polling_timeout=20)
+    bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending_updates=True)
