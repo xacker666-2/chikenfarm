@@ -153,7 +153,7 @@ def calculate_merge_bonus(level: int):
 # ==============================================================================
 def ask_ai(user_query: str) -> str:
     raw_key = os.environ.get("OPENROUTER_API_KEY", "")
-    # Очистка ключа от невидимых символов и переносов строк
+    # Очистка ключа от переносов строк, табуляций и пробелов
     key = "".join(raw_key.split())
 
     if not key or "твой_ключ" in key:
@@ -185,15 +185,12 @@ def ask_ai(user_query: str) -> str:
         return f"⚠️ Ошибка соединения с ИИ: {str(e)}"
 
 def safe_send_message(chat_id: int, text: str):
-    """Безопасная отправка сообщений с разбивкой длинных текстов и защитой от ошибок Markdown"""
-    # Разбиваем текст на куски до 4000 символов (лимит Telegram — 4096)
+    """Отправка сообщений с разбиением на части и fallback при ошибке Markdown"""
     chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
-    
     for chunk in chunks:
         try:
             bot.send_message(chat_id, chunk, parse_mode="Markdown")
         except Exception:
-            # Если Telegram ругается на некорректную Markdown-разметку от ИИ, шлем чистым текстом
             bot.send_message(chat_id, chunk)
 
 # ==============================================================================
@@ -272,4 +269,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Ошибка сброса вебхука: {e}")
     
-    bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending_updates=True)
+    bot.infinity_polling(timeout=20, long_polling_timeout=20)
