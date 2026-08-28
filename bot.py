@@ -30,9 +30,6 @@ threading.Thread(target=run_health_check, daemon=True).start()
 # ==============================================================================
 BOT_TOKEN = "8923655626:AAFcOSNkpT8I7ut6Mlh41pbvDYug7FHemgg"
 
-# .strip() автоматически удаляет переносы строк \n и пробелы
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
-
 bot = telebot.TeleBot(BOT_TOKEN)
 
 MULT1 = 4.5
@@ -152,10 +149,13 @@ def calculate_merge_bonus(level: int):
     }
 
 # ==============================================================================
-# 4. ИНТЕГРАЦИЯ С НЕЙРОСЕТЬЮ (OPENROUTER)
+# 4. ИНТЕГРАЦИЯ С НЕЙРОСЕТЬЮ (С ЖЕСТКОЙ ОЧИСТКОЙ КЛЮЧА)
 # ==============================================================================
 def ask_ai(user_query: str) -> str:
-    key = OPENROUTER_API_KEY.strip()
+    raw_key = os.environ.get("OPENROUTER_API_KEY", "")
+    # ЖЕСТКАЯ ОЧИСТКА: удаляет любые переносы \n, \r, пробелы и табы
+    key = "".join(raw_key.split())
+
     if not key or "твой_ключ" in key:
         return "⚠️ Не настроен OPENROUTER_API_KEY в переменных Render!"
 
