@@ -254,7 +254,8 @@ def handle_ai_chat(message):
 if __name__ == "__main__":
     print("🚀 Куриный ИИ-бот запущен!")
     try:
-        bot.remove_webhook()
-    except Exception:
-        pass
-    bot.infinity_polling()
+        bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Ошибка сброса вебхука: {e}")
+    
+    bot.infinity_polling(timeout=20, long_polling_timeout=20)
