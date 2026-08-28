@@ -1,4 +1,6 @@
 import os
+import json
+import re
 import threading
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -29,7 +31,6 @@ threading.Thread(target=run_health_check, daemon=True).start()
 # 2. КЛЮЧИ И НАСТРОЙКИ
 # ==============================================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8923655626:AAFcOSNkpT8I7ut6Mlh41pbvDYug7FHemgg")
-
 bot = telebot.TeleBot(BOT_TOKEN)
 
 MULT1 = 4.5
@@ -43,31 +44,41 @@ KNOWN_BASE_INCOME = {
 
 GROWTH_RATE = 3.49
 
-# Строгий промпт с жесткой математической системой
-SYSTEM_PROMPT = """Ты — строгий математический аналитик по игре "Куриная ферма".
-Твоя задача — давать КРАТКИЕ и ТОЧНЫЕ математические расчеты без галлюцинаций.
+# Системный промпт: ИИ выступает ИСКЛЮЧИТЕЛЬНО как JSON-парсер
+SYSTEM_PARSER_PROMPT = """Ты — NLU-парсер для игры "Куриная ферма".
+Твоя ЕДИНСТВЕННАЯ задача — разобрать текст пользователя и вернуть STRICT JSON.
+НИКАКОЙ МАТЕМАТИКИ И ВЫЧИСЛЕНИЙ НЕ ДЕЛАЙ!
 
-СТРОГАЯ ТАБЛИЦА ЕДИНИЦ И СТЕПЕНЕЙ:
-- 1 T (трлн) = 10^12
-- 1 qd (квадриллион) = 10^15 (1 000 T)
-- 1 Qd (квинтиллион) = 10^18 (1 000 qd)
-- 1 Sx (секстиллион) = 10^21 (1 000 Qd = 1 000 000 qd)
-- 1 Sp (септиллион) = 10^24 (1 000 Sx)
+Верни один из 3 вариантов JSON:
 
-ИГРОВЫЕ ПАРАМЕТРЫ:
-- Множители дохода: 4.5 и 12,500 (итоговый множитель = 56,250)
-- Базовый доход за 1 тик (5 сек): L25 = 205 T (2.05e14), L26 = 775 T (7.75e14), L27 = 2.5 qd (2.5e15)
-- В 1 часе = 720 тиков.
-- 100 кур 18 ур = 7 Sx (1 шт = 0.07 Sx).
+Вариант 1: Если пользователь просит посчитать ВРЕМЯ накопления (например: "сколько копить 3 Sp с 2 курами 27 ур"):
+{
+  "type": "calc_time",
+  "target_sx": <число_переведенное_в_единицы_Sx>,
+  "chickens": [{"level": <int_уровень>, "count": <int_количество>}]
+}
+* Правила конвертации в Sx для target_sx:
+  - Sp: умножь на 1000 (3 Sp = 3000)
+  - Sx: оставь как есть (10 Sx = 10)
+  - Qd: раздели на 1000 (500 Qd = 0.5)
+  - qd: раздели на 1000000 (2.5 qd = 0.0000025)
 
-ПРАВИЛА РАСЧЕТА:
-1. Всегда выводи в первой строке: `📌 [База: Множители 4.5×12.5k | L25=205т | L26=775т | L27=2.5qd]`
-2. При расчете времени переводи ВСЕ величины в Sx или степени 10^x.
-3. ПОМНИ: 1 Sp = 1000 Sx! (3 Sp = 3000 Sx). Не путай Sp и Sx!
-4. Пиши расчет по шагам: Доход за тик -> Доход в час -> Время накопления."""
+Вариант 2: Если пользователь просит посчитать ДОХОД или СТАТИСТИКУ конкретного набора кур:
+{
+  "type": "calc_stats",
+  "chickens": [{"level": <int>, "count": <int>}]
+}
+
+Вариант 3: Если вопрос обычный текстовый (стратегия, советы) без конкретных расчетов целей:
+{
+  "type": "chat",
+  "text": "<твой краткий и точный ответ>"
+}
+
+ОТВЕЧАЙ ТОЛЬКО ЧИСТЫМ JSON! Без ```json, без лишних слов."""
 
 # ==============================================================================
-# 3. МАТЕМАТИЧЕСКИЙ ДВИЖОК
+# 3. ТОЧНЫЙ МАТЕМАТИЧЕСКИЙ ДВИЖОК (PYTHON)
 # ==============================================================================
 def get_base_income(level: int) -> float:
     if level in KNOWN_BASE_INCOME:
@@ -89,23 +100,89 @@ def get_cost_sx(level: int) -> float:
 
 def format_units(val_in_base: float) -> str:
     if val_in_base >= 1e24:
-        return f"{val_in_base / 1e24:.2f} Sp"
+        return f"{val_in_base / 1e24:.3f} Sp"
     elif val_in_base >= 1e21:
-        return f"{val_in_base / 1e21:.2f} Sx"
+        return f"{val_in_base / 1e21:.3f} Sx"
     elif val_in_base >= 1e18:
-        return f"{val_in_base / 1e18:.2f} Qd"
+        return f"{val_in_base / 1e18:.3f} Qd"
     elif val_in_base >= 1e15:
-        return f"{val_in_base / 1e15:.2f} qd"
+        return f"{val_in_base / 1e15:.3f} qd"
     elif val_in_base >= 1e12:
-        return f"{val_in_base / 1e12:.2f} трлн"
+        return f"{val_in_base / 1e12:.3f} трлн"
     elif val_in_base >= 1e9:
-        return f"{val_in_base / 1e9:.2f} B"
+        return f"{val_in_base / 1e9:.3f} B"
     elif val_in_base >= 1e6:
-        return f"{val_in_base / 1e6:.2f} M"
-    elif val_in_base >= 1e3:
-        return f"{val_in_base / 1e3:.2f} K"
+        return f"{val_in_base / 1e6:.3f} M"
     else:
         return f"{val_in_base:.2f}"
+
+def calculate_time_exact(target_sx: float, chickens: list) -> str:
+    total_tick_base = 0.0
+    chicken_desc = []
+    
+    for c in chickens:
+        lvl = int(c.get("level", 18))
+        cnt = int(c.get("count", 1))
+        base_item = get_base_income(lvl)
+        total_tick_base += base_item * cnt * MULT1 * MULT2
+        chicken_desc.append(f"{cnt}× L{lvl}")
+    
+    tick_sx = total_tick_base / 1e21
+    hour_sx = tick_sx * 720
+    
+    if hour_sx <= 0:
+        return "⚠️ Доход равен 0 Sx/час. Накопить невозможно."
+    
+    hours_needed = target_sx / hour_sx
+    total_seconds = int(hours_needed * 3600)
+    
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    
+    time_str = ""
+    if hours > 0:
+        time_str += f"{hours} ч "
+    if minutes > 0 or hours > 0:
+        time_str += f"{minutes} мин "
+    time_str += f"{seconds} сек"
+    
+    chickens_str = ", ".join(chicken_desc)
+    target_formatted = format_units(target_sx * 1e21)
+    hour_inc_formatted = format_units(hour_sx * 1e21)
+    
+    return (
+        f"⚡ **Точный расчет (Python Engine):**\n\n"
+        f"🎯 **Цель:** `{target_formatted}` (`{target_sx:.4f} Sx`)\n"
+        f"🐔 **Состав фермы:** {chickens_str}\n"
+        f"📈 **Доход в час:** `{hour_inc_formatted}/час` (`{hour_sx:.4f} Sx/час`)\n"
+        f"⏳ **Время накопления:** **{time_str}** (`{hours_needed:.2f}` ч.)"
+    )
+
+def calculate_chickens_exact(chickens: list) -> str:
+    total_tick_base = 0.0
+    total_cost_sx = 0.0
+    total_18 = 0
+    chicken_desc = []
+    
+    for c in chickens:
+        lvl = int(c.get("level", 18))
+        cnt = int(c.get("count", 1))
+        total_tick_base += get_base_income(lvl) * cnt * MULT1 * MULT2
+        total_cost_sx += get_cost_sx(lvl) * cnt
+        total_18 += count_18_lvl(lvl) * cnt
+        chicken_desc.append(f"{cnt}× L{lvl}")
+        
+    hour_sx = (total_tick_base / 1e21) * 720
+    payback = total_cost_sx / hour_sx if hour_sx > 0 else 0
+    
+    return (
+        f"📊 **Расчет фермы (Python Engine):**\n\n"
+        f"🐔 **Состав:** {', '.join(chicken_desc)}\n"
+        f"⚡ **Доход в час:** `{hour_sx:.4f} Sx/час`\n"
+        f"💰 **Суммарная цена:** `{total_cost_sx:.2f} Sx` ({total_18:,} кур 18 ур.)\n"
+        f"⏳ **Окупаемость:** `{payback:.2f} часов`"
+    )
 
 def calculate_full_stats(level: int):
     base_inc = get_base_income(level)
@@ -119,7 +196,6 @@ def calculate_full_stats(level: int):
     return {
         "level": level,
         "base_inc": base_inc,
-        "tick_inc_base": tick_inc_base,
         "hour_inc_sx": hour_inc_sx,
         "cost_sx": cost_sx,
         "count18": count18,
@@ -138,25 +214,21 @@ def calculate_merge_bonus(level: int):
     return {
         "level": level,
         "next_level": level + 1,
-        "sum_three_base": sum_three,
-        "next_base": base_l1,
         "bonus_pct": bonus_pct,
-        "hour_3l_sx": hour_l,
-        "hour_l1_sx": hour_l1,
         "diff_hour_sx": diff_hour_sx
     }
 
 # ==============================================================================
-# 4. ИНТЕГРАЦИЯ С НЕЙРОСЕТЬЮ
+# 4. ОБРАБОТКА ЗАПРОСОВ (NLU + PYTHON MATH)
 # ==============================================================================
-def ask_ai(user_query: str) -> str:
+def process_user_query(user_query: str) -> str:
     raw_key = os.environ.get("OPENROUTER_API_KEY", "")
     key = "".join(raw_key.split())
 
     if not key or "твой_ключ" in key:
-        return "⚠️ Не настроен OPENROUTER_API_KEY в переменных окружения Render!"
+        return "⚠️ Не настроен OPENROUTER_API_KEY!"
 
-    url = "https://openrouter.ai/api/v1/chat/completions"
+    url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json"
@@ -164,22 +236,48 @@ def ask_ai(user_query: str) -> str:
     payload = {
         "model": "meta-llama/llama-3.3-70b-instruct",
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PARSER_PROMPT},
             {"role": "user", "content": user_query}
-        ]
+        ],
+        "temperature": 0.1
     }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=25)
-        if response.status_code == 200:
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+        response = requests.post(url, json=payload, headers=headers, timeout=20)
+        if response.status_code != 200:
+            return f"⚠️ Ошибка сети ({response.status_code})"
+            
+        content = response.json()["choices"][0]["message"]["content"].strip()
+        
+        # Очистка от возможных разметок markdown json
+        if content.startswith("```"):
+            content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
+            content = re.sub(r"\n?```$", "", content)
+            content = content.strip()
+            
+        data = json.loads(content)
+        req_type = data.get("type")
+        
+        if req_type == "calc_time":
+            target_sx = float(data.get("target_sx", 0))
+            chickens = data.get("chickens", [])
+            return calculate_time_exact(target_sx, chickens)
+            
+        elif req_type == "calc_stats":
+            chickens = data.get("chickens", [])
+            return calculate_chickens_exact(chickens)
+            
+        elif req_type == "chat":
+            return data.get("text", "Не смог обработать ответ.")
+            
         else:
-            return f"⚠️ Ошибка нейросети ({response.status_code}): {response.text}"
-    except requests.exceptions.Timeout:
-        return "⚠️ Сервер ИИ не ответил за отведенное время."
+            return "⚠️ Неизвестный формат данных."
+            
+    except json.JSONDecodeError:
+        # Если ИИ не вернул JSON, отдаем текст напрямую
+        return content
     except Exception as e:
-        return f"⚠️ Ошибка соединения с ИИ: {str(e)}"
+        return f"⚠️ Ошибка обработки: {str(e)}"
 
 def safe_send_message(chat_id: int, text: str):
     chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
@@ -202,11 +300,12 @@ def get_main_keyboard():
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "🐔 **ИИ-Помощник Куриной Фермы**\n\n"
-        "📌 *Текущая база данных:*\n"
-        "• Множители: 4.5 и 12,500\n"
-        "• Базы: L25=205 трлн, L26=775 трлн, L27=2.5 qd\n\n"
-        "Используй кнопки ниже или пиши вопросы текстом!"
+        "🐔 **Калькулятор и Аналитик Куриной Фермы**\n\n"
+        "Вычисления производятся на **100% точном Python-движке**.\n\n"
+        "Примеры текстовых запросов:\n"
+        "• *Сколько копить 3 Sp с 2 курами 27 ур?*\n"
+        "• *Какой доход у 5 кур 26 уровня?*\n"
+        "• *Сколько времени нужно на 500 Sx с 3 курами 25 уровня?*"
     )
     bot.send_message(message.chat.id, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
@@ -216,8 +315,7 @@ def handle_quick_chicken(message):
         lvl = int(message.text.split()[-1])
         st = calculate_full_stats(lvl)
         msg = (
-            f"📌 `[База: Множители 4.5×12.5k | L{lvl}]`\n\n"
-            f"🐔 **Курица {st['level']} уровня**\n"
+            f"🐔 **Курица {st['level']} уровня**\n\n"
             f"🔹 Базовый доход: {format_units(st['base_inc'])}\n"
             f"⚡ Доход в час: `{st['hour_inc_sx']:.4f} Sx/час`\n"
             f"💰 Цена: `{st['cost_sx']:.2f} Sx` ({st['count18']:,} кур 18 ур.)\n"
@@ -233,8 +331,7 @@ def handle_quick_merge(message):
         lvl = int(message.text.split()[-1].split("->")[0])
         m = calculate_merge_bonus(lvl)
         msg = (
-            f"📌 `[База: Слияние {m['level']}->{m['next_level']}]`\n\n"
-            f"🔄 **Слияние 3× [{m['level']}] ➔ 1× [{m['next_level']}]**\n"
+            f"🔄 **Слияние 3× [{m['level']}] ➔ 1× [{m['next_level']}]**\n\n"
             f"🔥 Бонус прироста: `+{m['bonus_pct']:.2f}%`\n"
             f"📈 Прирост дохода: `+{m['diff_hour_sx']:.2f} Sx/час`"
         )
@@ -244,31 +341,30 @@ def handle_quick_merge(message):
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Таблица (20-28)")
 def handle_table(message):
-    res = "📊 **Уровни 20–28 (База проверена):**\n\n`Ур | Доход/час | Цена | Окупаемость`\n`----------------------------------`\n"
+    res = "📊 **Уровни 20–28 (Точный расчет):**\n\n`Ур | Доход/час | Цена | Окупаемость`\n`----------------------------------`\n"
     for lvl in range(20, 29):
         st = calculate_full_stats(lvl)
         res += f"`{lvl:2d} | {st['hour_inc_sx']:10.2f} | {st['cost_sx']:7.2f} | {st['payback_hours']:4.1f}ч`\n"
     safe_send_message(message.chat.id, res)
 
-# Текстовые запросы к ИИ с изменяющимся сообщением «Думаю...»
 @bot.message_handler(func=lambda msg: True)
 def handle_ai_chat(message):
-    sent_msg = bot.send_message(message.chat.id, "⏳ Думаю и сверяю базу данных...")
-    ai_response = ask_ai(message.text)
+    sent_msg = bot.send_message(message.chat.id, "⏳ Выполняю точный расчет...")
+    response_text = process_user_query(message.text)
     
     try:
-        bot.edit_message_text(ai_response, chat_id=message.chat.id, message_id=sent_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(response_text, chat_id=message.chat.id, message_id=sent_msg.message_id, parse_mode="Markdown")
     except Exception:
         try:
-            bot.edit_message_text(ai_response, chat_id=message.chat.id, message_id=sent_msg.message_id)
+            bot.edit_message_text(response_text, chat_id=message.chat.id, message_id=sent_msg.message_id)
         except Exception:
-            safe_send_message(message.chat.id, ai_response)
+            safe_send_message(message.chat.id, response_text)
 
 # ==============================================================================
 # 6. ЗАПУСК
 # ==============================================================================
 if __name__ == "__main__":
-    print("🚀 Куриный ИИ-бот запущен!")
+    print("🚀 Куриный Бот запущен (Гибридный NLU + Python Математика)!")
     try:
         bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
