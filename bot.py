@@ -29,7 +29,9 @@ threading.Thread(target=run_health_check, daemon=True).start()
 # 2. КЛЮЧИ И НАСТРОЙКИ
 # ==============================================================================
 BOT_TOKEN = "8923655626:AAFcOSNkpT8I7ut6Mlh41pbvDYug7FHemgg"
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "твой_ключ_openrouter_здесь")
+
+# .strip() автоматически удаляет переносы строк \n и пробелы
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -44,7 +46,7 @@ KNOWN_BASE_INCOME = {
 
 GROWTH_RATE = 3.49
 
-# Системный промпт для нейросети
+# Системный промпт для ИИ-помощника
 SYSTEM_PROMPT = """Ты — личный ИИ-помощник и стратегический аналитик по игре "Куриная ферма".
 Твоя задача — помогать игроку расчитывать доходы, окупаемость, слияния куриц и давать советы по оптимизации фермы.
 
@@ -67,7 +69,7 @@ SYSTEM_PROMPT = """Ты — личный ИИ-помощник и стратег
    - Стоимость 1 курицы L = 3^(L-18) * 0.07 Sx.
    - Бонус слияния (прирост дохода): Bonus% = (BaseIncome(L+1) - 3*BaseIncome(L)) / (3*BaseIncome(L)) * 100%.
 
-Отвечай четко, умом и по делу, с юмором и глубоким пониманием механик куриной фермы."""
+Отвечай четко, по делу, с экспертным пониманием механик куриной фермы."""
 
 # ==============================================================================
 # 3. МАТЕМАТИЧЕСКИЙ ДВИЖОК
@@ -153,13 +155,14 @@ def calculate_merge_bonus(level: int):
 # 4. ИНТЕГРАЦИЯ С НЕЙРОСЕТЬЮ (OPENROUTER)
 # ==============================================================================
 def ask_ai(user_query: str) -> str:
-    if not OPENROUTER_API_KEY or "твой_ключ" in OPENROUTER_API_KEY:
+    key = OPENROUTER_API_KEY.strip()
+    if not key or "твой_ключ" in key:
         return "⚠️ Не настроен OPENROUTER_API_KEY в переменных Render!"
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "json"
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json"
     }
     payload = {
         "model": "meta-llama/llama-3.3-70b-instruct",
@@ -175,9 +178,9 @@ def ask_ai(user_query: str) -> str:
             data = response.json()
             return data["choices"][0]["message"]["content"]
         else:
-            return f" Ошибка нейросети ({response.status_code}): {response.text}"
+            return f"⚠️ Ошибка нейросети ({response.status_code}): {response.text}"
     except Exception as e:
-        return f" Ошибка соединения с ИИ: {str(e)}"
+        return f"⚠️ Ошибка соединения с ИИ: {str(e)}"
 
 # ==============================================================================
 # 5. ХЕНДЛЕРЫ TELEGRAM
@@ -196,33 +199,39 @@ def send_welcome(message):
         "Я могу:\n"
         "1. Рассчитывать статистику кур и слияний по кнопкам ниже.\n"
         "2. Отвечать на **любые вопросы** текстом благодаря встроенной нейросети!\n\n"
-        "Спроси меня что угодно (например: *'Что выгоднее: 3 курицы 25 или одна 26?'*)"
+        "Спроси меня что угодно!"
     )
     bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 @bot.message_handler(func=lambda msg: msg.text.startswith("🐔 Курица "))
 def handle_quick_chicken(message):
-    lvl = int(message.text.split()[-1])
-    st = calculate_full_stats(lvl)
-    msg = (
-        f"🐔 **Курица {st['level']} уровня**\n\n"
-        f"🔹 Базовый доход: {format_units(st['base_inc'])}\n"
-        f"⚡ Доход в час: `{st['hour_inc_sx']:.4f} Sx/час`\n"
-        f"💰 Цена: `{st['cost_sx']:.2f} Sx` ({st['count18']:,} кур 18 ур.)\n"
-        f"⏳ Окупаемость: `{st['payback_hours']:.2f} часов`"
-    )
-    bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+    try:
+        lvl = int(message.text.split()[-1])
+        st = calculate_full_stats(lvl)
+        msg = (
+            f"🐔 **Курица {st['level']} уровня**\n\n"
+            f"🔹 Базовый доход: {format_units(st['base_inc'])}\n"
+            f"⚡ Доход в час: `{st['hour_inc_sx']:.4f} Sx/час`\n"
+            f"💰 Цена: `{st['cost_sx']:.2f} Sx` ({st['count18']:,} кур 18 ур.)\n"
+            f"⏳ Окупаемость: `{st['payback_hours']:.2f} часов`"
+        )
+        bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка: {e}")
 
 @bot.message_handler(func=lambda msg: msg.text.startswith("🔄 Слияние "))
 def handle_quick_merge(message):
-    lvl = int(message.text.split()[-1].split("->")[0])
-    m = calculate_merge_bonus(lvl)
-    msg = (
-        f"🔄 **Слияние 3× [{m['level']}] ➔ 1× [{m['next_level']}]**\n\n"
-        f"🔥 Бонус прироста: `+{m['bonus_pct']:.2f}%`\n"
-        f"📈 Прирост дохода: `+{m['diff_hour_sx']:.2f} Sx/час`"
-    )
-    bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+    try:
+        lvl = int(message.text.split()[-1].split("->")[0])
+        m = calculate_merge_bonus(lvl)
+        msg = (
+            f"🔄 **Слияние 3× [{m['level']}] ➔ 1× [{m['next_level']}]**\n\n"
+            f"🔥 Бонус прироста: `+{m['bonus_pct']:.2f}%`\n"
+            f"📈 Прирост дохода: `+{m['diff_hour_sx']:.2f} Sx/час`"
+        )
+        bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка: {e}")
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Таблица (20-28)")
 def handle_table(message):
