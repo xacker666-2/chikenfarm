@@ -248,4 +248,4 @@ if __name__ == "__main__":
         bot.remove_webhook()
     except Exception:
         pass
-    bot.infinity_polling(skip_pending_commits=True)
+    bot.infinity_polling()
