@@ -31,8 +31,8 @@ threading.Thread(target=run_health_check, daemon=True).start()
 # ==============================================================================
 # 2. КЛЮЧИ И НАСТРОЙКИ
 # ==============================================================================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8923655626:AAFcOSNkpT8I7ut6Mlh41pbvDYug7FHemgg")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
