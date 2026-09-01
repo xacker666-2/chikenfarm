@@ -61,12 +61,13 @@ def ask_groq_ai(user_text: str) -> str:
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama3-70b-8192",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_text}
         ],
         "temperature": 0.7
+    }
     }
 
     response = requests.post(url, json=payload, headers=headers, timeout=15)
