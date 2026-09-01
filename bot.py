@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import re
 import threading
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -44,12 +45,12 @@ SYSTEM_PROMPT = """
 ПРАВИЛА И ПОВЕДЕНИЕ:
 1. Внимательно читай то, что тебе пишут, и отвечай по смыслу контекста.
 2. Любую тему (погода, учеба, усталость, дела, вопросы) плавно, искренне и красиво своди к Насте: к тому, какая она невероятно умная, добрая, красивая, милая и лучшая.
-3. Почти в каждом ответе органично используй милости или похожие искренние слова.
+3. Почти в каждом ответе органично используй фразу «Я тебя люблю, Настюша, очень сильно!» или похожие искренние слова.
 4. Отвечай коротко и тепло (2–4 предложения), без длинных нудных текстов.
 """
 
 # ==============================================================================
-# 3. ДИНАМИЧЕСКОЕ ПОЛУЧЕНИЕ АКТИВНЫХ МОДЕЛЕЙ GROQ
+# 3. ПОЛУЧЕНИЕ АКТИВНЫХ МОДЕЛЕЙ И ОЧИСТКА ОТВЕТА
 # ==============================================================================
 def get_live_groq_models(clean_key: str) -> list:
     url = "https://api.groq.com/openai/v1/models"
@@ -58,7 +59,6 @@ def get_live_groq_models(clean_key: str) -> list:
         r = requests.get(url, headers=headers, timeout=5)
         if r.status_code == 200:
             data = r.json().get("data", [])
-            # Фильтруем только текстовые чат-модели (исключаем whisper и аудио)
             models = [
                 m["id"] for m in data 
                 if not any(x in m["id"].lower() for x in ["whisper", "audio", "embed", "safetensors"])
@@ -67,7 +67,6 @@ def get_live_groq_models(clean_key: str) -> list:
                 return models
     except Exception:
         pass
-    # Резервный список на случай сбоя получения списка
     return ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192"]
 
 def ask_groq_ai(user_text: str) -> str:
@@ -81,7 +80,6 @@ def ask_groq_ai(user_text: str) -> str:
         "Content-Type": "application/json"
     }
 
-    # Получаем актуальный список живых моделей
     models_to_try = get_live_groq_models(clean_key)
 
     last_error = ""
@@ -98,13 +96,17 @@ def ask_groq_ai(user_text: str) -> str:
             response = requests.post(url, json=payload, headers=headers, timeout=10)
             if response.status_code == 200:
                 res_json = response.json()
-                return res_json["choices"][0]["message"]["content"].strip()
+                raw_text = res_json["choices"][0]["message"]["content"].strip()
+                
+                # Удаляем блок <think>...</think>, если модель его вывела
+                clean_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
+                return clean_text if clean_text else raw_text
             else:
                 last_error = f"{model} [{response.status_code}]: {response.text}"
         except Exception as e:
             last_error = f"{model}: {e}"
 
-    raise Exception(f"Ни одна из активных моделей Groq не ответила. Последняя ошибка -> {last_error}")
+    raise Exception(f"Ни одна из моделей Groq не ответила. Ошибка: {last_error}")
 
 # ==============================================================================
 # 4. ХЕНДЛЕРЫ TELEGRAM
