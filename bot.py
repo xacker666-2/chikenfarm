@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 import threading
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -31,6 +32,8 @@ threading.Thread(target=run_health_check, daemon=True).start()
 # 2. КЛЮЧИ И НАСТРОЙКИ
 # ==============================================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8923655626:AAFcOSNkpT8I7ut6Mlh41pbvDYug7FHemgg")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 MULT1 = 4.5
@@ -219,22 +222,21 @@ def calculate_merge_bonus(level: int):
     }
 
 # ==============================================================================
-# 4. ОБРАБОТКА ЗАПРОСОВ (NLU + PYTHON MATH)
+# 4. ОБРАБОТКА ЗАПРОСОВ (GROQ NLU + PYTHON MATH)
 # ==============================================================================
 def process_user_query(user_query: str) -> str:
-    raw_key = os.environ.get("OPENROUTER_API_KEY", "")
-    key = "".join(raw_key.split())
+    key = "".join(GROQ_API_KEY.split())
 
-    if not key or "твой_ключ" in key:
-        return "⚠️ Не настроен OPENROUTER_API_KEY!"
+    if not key:
+        return "⚠️ Не настроен GROQ_API_KEY!"
 
-    url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)"
+    url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "meta-llama/llama-3.3-70b-instruct",
+        "model": "llama-3.3-70b-versatile",
         "messages": [
             {"role": "system", "content": SYSTEM_PARSER_PROMPT},
             {"role": "user", "content": user_query}
@@ -243,13 +245,15 @@ def process_user_query(user_query: str) -> str:
     }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=20)
-        if response.status_code != 200:
-            return f"⚠️ Ошибка сети ({response.status_code})"
-            
-        content = response.json()["choices"][0]["message"]["content"].strip()
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
         
-        # Очистка от возможных разметок markdown json
+        if response.status_code != 200:
+            return f"⚠️ Ошибка API Groq ({response.status_code}): {response.text}"
+            
+        res_data = response.json()
+        content = res_data["choices"][0]["message"]["content"].strip()
+        
+        # Очистка от markdown блоков json
         if content.startswith("```"):
             content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
             content = re.sub(r"\n?```$", "", content)
@@ -274,8 +278,7 @@ def process_user_query(user_query: str) -> str:
             return "⚠️ Неизвестный формат данных."
             
     except json.JSONDecodeError:
-        # Если ИИ не вернул JSON, отдаем текст напрямую
-        return content
+        return "⚠️ Не удалось распознать параметры запроса. Укажите, например: «Сколько копить 3 Sp с 2 курами 27 ур»."
     except Exception as e:
         return f"⚠️ Ошибка обработки: {str(e)}"
 
@@ -309,7 +312,7 @@ def send_welcome(message):
     )
     bot.send_message(message.chat.id, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
-@bot.message_handler(func=lambda msg: msg.text.startswith("🐔 Курица "))
+@bot.message_handler(func=lambda msg: msg.text and msg.text.startswith("🐔 Курица "))
 def handle_quick_chicken(message):
     try:
         lvl = int(message.text.split()[-1])
@@ -325,7 +328,7 @@ def handle_quick_chicken(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
-@bot.message_handler(func=lambda msg: msg.text.startswith("🔄 Слияние "))
+@bot.message_handler(func=lambda msg: msg.text and msg.text.startswith("🔄 Слияние "))
 def handle_quick_merge(message):
     try:
         lvl = int(message.text.split()[-1].split("->")[0])
@@ -361,13 +364,20 @@ def handle_ai_chat(message):
             safe_send_message(message.chat.id, response_text)
 
 # ==============================================================================
-# 6. ЗАПУСК
+# 6. НЕПРЕРЫВНЫЙ ЗАПУСК С АВТОВОССТАНОВЛЕНИЕМ
 # ==============================================================================
 if __name__ == "__main__":
-    print("🚀 Куриный Бот запущен (Гибридный NLU + Python Математика)!")
+    print("🚀 Куриный Бот запущен на Groq API (NLU + Python Math Engine)!")
+    
     try:
         bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
-        print(f"Ошибка сброса вебхука: {e}")
-    
-    bot.infinity_polling(timeout=20, long_polling_timeout=20)
+        print(f"Предупреждение вебхука: {e}")
+
+    # Бесконечный цикл переподключения при любых разрывах сети
+    while True:
+        try:
+            bot.infinity_polling(timeout=20, long_polling_timeout=20)
+        except Exception as e:
+            print(f"⚠️ Сбой сети Telegram. Перезапуск через 5 секунд... Ошибка: {e}")
+            time.sleep(5)
