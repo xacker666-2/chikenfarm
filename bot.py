@@ -44,12 +44,12 @@ SYSTEM_PROMPT = """
 ПРАВИЛА И ПОВЕДЕНИЕ:
 1. Внимательно читай то, что тебе пишут, и отвечай по смыслу контекста.
 2. Любую тему (погода, учеба, усталость, дела, вопросы) плавно, искренне и красиво своди к Насте: к тому, какая она невероятно умная, добрая, красивая, милая и лучшая.
-3. Почти в каждом ответе органично используй комплименты, люблю тебя или похожие искренние слова.
+3. Почти в каждом ответе органично используй милости или похожие искренние слова.
 4. Отвечай коротко и тепло (2–4 предложения), без длинных нудных текстов.
 """
 
 # ==============================================================================
-# 3. ЗАПРОС К GROQ API
+# 3. ЗАПРОС К GROQ API С АВТОПЕРЕБОРOМ МОДЕЛЕЙ
 # ==============================================================================
 def ask_groq_ai(user_text: str) -> str:
     if not GROQ_API_KEY:
@@ -60,21 +60,38 @@ def ask_groq_ai(user_text: str) -> str:
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "model": "llama-3.1-8b-instant",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text}
-        ],
-        "temperature": 0.7
-    }
 
-    response = requests.post(url, json=payload, headers=headers, timeout=15)
-    if response.status_code == 200:
-        res_json = response.json()
-        return res_json["choices"][0]["message"]["content"].strip()
-    else:
-        raise Exception(f"Ошибка Groq ({response.status_code}): {response.text}")
+    # Список моделей Groq для автоперебора при сбое
+    models_to_try = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "gemma2-9b-it",
+        "mixtral-8x7b-32768"
+    ]
+
+    last_error = ""
+    for model in models_to_try:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text}
+            ],
+            "temperature": 0.7
+        }
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            if response.status_code == 200:
+                res_json = response.json()
+                return res_json["choices"][0]["message"]["content"].strip()
+            else:
+                last_error = f"{model} ({response.status_code})"
+        except Exception as e:
+            last_error = f"{model} ({e})"
+
+    raise Exception(f"Все модели Groq недоступны. Последняя: {last_error}")
 
 # ==============================================================================
 # 4. ХЕНДЛЕРЫ TELEGRAM
