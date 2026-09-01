@@ -36,39 +36,39 @@ if not BOT_TOKEN:
     print("❌ ОШИБКА: Переменная BOT_TOKEN не найдена в Render Environment Variables!")
     sys.exit(1)
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN.strip().strip('"').strip("'"))
 
 SYSTEM_PROMPT = """
 Ты — бот, созданный исключительно для того, чтобы делать комплименты и признаваться в любви девушке по имени Настя (Настюша).
 
 ПРАВИЛА И ПОВЕДЕНИЕ:
 1. Внимательно читай то, что тебе пишут, и отвечай по смыслу контекста.
-2. Любую тему (погода, учеба, усталость, дела, вопросы) плавно, искренне и красиво своди к Насте: к тому, какая она невероятно умная, добрая, красивая, милая и лучшая.
-3. Почти в каждом ответе органично используй милости или похожие искренние слова.
+2. Любую тему (погода, учеба, усталость, дела, вопросы) плавно, искренне и красиво своди к Насте: к том, какая она невероятно умная, добрая, красивая, милая и лучшая.
+3. Почти в каждом ответе органично используй фразу «Я тебя люблю, Настюша, очень сильно!» или похожие искренние слова.
 4. Отвечай коротко и тепло (2–4 предложения), без длинных нудных текстов.
 """
 
 # ==============================================================================
-# 3. ЗАПРОС К GROQ API С АВТОПЕРЕБОРOМ МОДЕЛЕЙ
+# 3. ЗАПРОС К GROQ API
 # ==============================================================================
 def ask_groq_ai(user_text: str) -> str:
     if not GROQ_API_KEY:
         raise Exception("GROQ_API_KEY не установлен в переменные окружения Render!")
 
+    # Очистка ключа от невидимых пробелов и кавычек
+    clean_key = GROQ_API_KEY.strip().strip('"').strip("'")
+
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {clean_key}",
         "Content-Type": "application/json"
     }
 
-    # Список моделей Groq для автоперебора при сбое
     models_to_try = [
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
         "llama3-70b-8192",
-        "llama3-8b-8192",
-        "gemma2-9b-it",
-        "mixtral-8x7b-32768"
+        "gemma2-9b-it"
     ]
 
     last_error = ""
@@ -87,11 +87,11 @@ def ask_groq_ai(user_text: str) -> str:
                 res_json = response.json()
                 return res_json["choices"][0]["message"]["content"].strip()
             else:
-                last_error = f"{model} ({response.status_code})"
+                last_error = f"{model} [{response.status_code}]: {response.text}"
         except Exception as e:
-            last_error = f"{model} ({e})"
+            last_error = f"{model}: {e}"
 
-    raise Exception(f"Все модели Groq недоступны. Последняя: {last_error}")
+    raise Exception(f"Детали ошибки Groq -> {last_error}")
 
 # ==============================================================================
 # 4. ХЕНДЛЕРЫ TELEGRAM
